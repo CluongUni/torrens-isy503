@@ -7,7 +7,6 @@ import cv2
 from io import BytesIO
 from flask import Flask
 from tensorflow import keras
-#from tensorflow.keras.models import load_model
 import tensorflow as tf
 from keras.api.models import load_model
 from PIL import Image
