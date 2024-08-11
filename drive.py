@@ -65,7 +65,6 @@ def send_command(steering_angle, throttle):
 
 
 if __name__ == "__main__":
-    # model = load_model('model_augmented4.h5')
     model = load_model('model.h5')
     app = socketio.Middleware(sio, app)
     eventlet.wsgi.server(eventlet.listen(('', 4567)), app)
