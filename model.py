@@ -9,7 +9,9 @@ from keras.api.optimizers import Adam
 from keras.api.layers import Dense, Conv2D, MaxPooling2D, Dropout, Flatten
 from keras.api.utils import to_categorical
 from sklearn.utils import shuffle
-from sklearn.model_selection import train_test_split
+import argparse
+from scikeras.wrappers import KerasClassifier, KerasRegressor
+from sklearn.model_selection import GridSearchCV, train_test_split
 from imgaug import augmenters as iaa
 import cv2
 import random
@@ -155,7 +157,7 @@ def batch_generator(images, steering_angles, batch_size, is_training):
             batch_steering.append(steering)
         yield np.asarray(batch_img), np.asarray(batch_steering)
 
-def nvidia_model():
+def nvidia_model(learning_rate=0.0001, dropout_rate=0.5):
     '''
     Define the Nvidia model
     '''
@@ -167,15 +169,20 @@ def nvidia_model():
     model.add(Conv2D(64, kernel_size=(3, 3), activation='elu'))
     model.add(Conv2D(64, kernel_size=(3, 3), activation='elu'))
     model.add(Flatten())
+    model.add(Dropout(dropout_rate))
     model.add(Dense(100, activation='elu'))
     model.add(Dense(50, activation='elu'))
     model.add(Dense(10, activation='elu'))
     model.add(Dense(1))
 
-    adam = Adam(learning_rate=0.0001)
+    adam = Adam(learning_rate=learning_rate)
     model.compile(loss=tf.keras.losses.MeanSquaredError(),
                   optimizer=adam, metrics=['accuracy'])
     return model
+
+def create_model(learning_rate=0.0001, dropout_rate=0.3):
+    return nvidia_model(learning_rate=learning_rate, dropout_rate=dropout_rate)
+
 
 def plot_history(history):
     '''
@@ -197,33 +204,46 @@ def plot_history(history):
     plt.tight_layout()
     plt.show()
 
-# Constants
-TRAINING_DATA_DIR = 'training_data'
-TRAINING_DATA_FILENAME = 'driving_log.csv'
-TRAINING_DATA_IMG_DIR = 'IMG'
-DEFAULT_MODEL_NAME = 'model.h5'
+def load_and_preprocess_images(image_paths):
+    '''
+    Load and preprocess the images
+    '''
+    images = []
+    for path in image_paths:
+        img = cv2.imread(path)
+        img = cv2.resize(img, (200, 66))  # Resize to the required input shape (66, 200, 3)
+        img = img / 255.0  # Normalize pixel values to [0, 1]
+        images.append(img)
+    return np.array(images)
 
-def main():
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    data_directory = os.path.join(script_dir, TRAINING_DATA_DIR)
-    training_data_file_fullpath = os.path.join(data_directory, TRAINING_DATA_FILENAME)
-    img_data_directory = os.path.join(data_directory, TRAINING_DATA_IMG_DIR)
+def get_best_params(X_train, y_train):
+    '''
+    Get the best parameters for the model
+    '''
+    param_grid = {
+        'batch_size': [32, 64, 128],
+        'epochs': [10, 20],
+        'learning_rate': [0.001, 0.0001],
+        'dropout_rate': [0.3, 0.5],
+    }
 
-    df = load_data(training_data_file_fullpath)
-    df = preprocess_paths(df)
-    df = balance_dataset(df)
-       
-    image_paths, steerings = load_img_steering(img_data_directory, df)
-    X_train, X_val, y_train, y_val = train_test_split(image_paths, steerings, test_size=0.2, random_state=20)
+    model = KerasRegressor(build_fn=create_model,learning_rate=0.001, dropout_rate=0.5,verbose=1)
+    grid = GridSearchCV(estimator=model, param_grid=param_grid, n_jobs=-1, cv=3)
+    grid_result = grid.fit(X_train, y_train)
+    print(f"Best: {grid_result.best_score_} using {grid_result.best_params_}")
+    return grid_result.best_params_
 
-    model = nvidia_model()
-    model.summary()
+def train_model(X_train, y_train, X_val, y_val, params, model_name):
+    '''
+    Train the model
+    '''
+    best_model = create_model(learning_rate=params['learning_rate'], 
+                              dropout_rate=params['dropout_rate'])
 
-    history = model.fit(
-        batch_generator(X_train, y_train, 100, True),
+    history = best_model.fit(
+        batch_generator(X_train, y_train, params['batch_size'], True),
         steps_per_epoch=300,
-        epochs=10,
+        epochs=params['epochs'],
         validation_data=batch_generator(X_val, y_val, 100, False),
         validation_steps=200,
         shuffle=True,
@@ -233,8 +253,58 @@ def main():
     plot_history(history)
 
     # Save the model
-    model.save(DEFAULT_MODEL_NAME)
-    print(f"Model saved as '{DEFAULT_MODEL_NAME}'")
+    best_model.save(model_name)
+    print(f"Model saved as '{model_name}'")
+
+def train_default(X_train, y_train, X_val, y_val, model_name):
+    default_params = {
+        'batch_size': 64,
+        'epochs': 20,
+        'learning_rate': 0.0001,
+        'dropout_rate': 0.5
+    }
+    train_model(X_train, y_train, X_val, y_val, default_params, model_name)    
+# Constants
+TRAINING_DATA_DIR = 'training_data'
+TRAINING_DATA_FILENAME = 'driving_log.csv'
+TRAINING_DATA_IMG_DIR = 'IMG'
+DEFAULT_MODEL_NAME = 'model.h5'
+
+def main():
+    parser = argparse.ArgumentParser(description='Model training script')
+    parser.add_argument('--get_best_params', action='store_true', help='Get the best parameters using GridSearchCV')
+    parser.add_argument('--train_default', type=str, help='Train the model with default parameters and save with the given model name')
+    parser.add_argument('--name', type=str, help='Get best parameters and train the model with the given model name')
+
+    args = parser.parse_args()
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_directory = os.path.join(script_dir, TRAINING_DATA_DIR)
+    training_data_file_fullpath = os.path.join(data_directory, TRAINING_DATA_FILENAME)
+    img_data_directory = os.path.join(data_directory, TRAINING_DATA_IMG_DIR)
+
+    df = load_data(training_data_file_fullpath)
+    df = preprocess_paths(df)
+    df = balance_dataset(df)
+
+    image_paths, steerings = load_img_steering(img_data_directory, df)
+    X_train, X_val, y_train, y_val = train_test_split(image_paths, steerings, test_size=0.2, random_state=20)
+    X_train_images = load_and_preprocess_images(X_train)
+    print(X_train_images.shape)
+    
+    if args.get_best_params:
+        get_best_params(X_train_images, y_train)
+    elif args.train_default:
+        if not args.train_default:
+            raise ValueError("Model name must be provided with --train_default")
+        train_default(X_train, y_train, X_val, y_val, args.train_default)
+    elif args.name:
+        if not args.name:
+            raise ValueError("Model name must be provided with --name")
+        best_params = get_best_params(X_train_images, y_train)
+        train_model(X_train, y_train, X_val, y_val, best_params, args.name)
+    else:
+        print("Please provide a valid command. Use --help for more information.")
 
 if __name__ == '__main__':
     main()
