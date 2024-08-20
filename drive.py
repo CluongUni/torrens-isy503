@@ -15,7 +15,7 @@ from PIL import Image
 
 app = Flask(__name__)
 sio = socketio.Server()
-speed_limit = 10
+speed_limit = 10 # Speed limit of the car in the simulator
 
 def img_preprocess(img):
     img = img[60:130, :, :]
@@ -31,7 +31,10 @@ def preprocess_image(image_data):
     return img_preprocess(image)
 
 def calculate_throttle(speed):
-    return 1.0 - speed / speed_limit
+    '''
+    Calculate throttle based on the speed of the car
+    '''
+    return 1.0 - speed / speed_limit # Brake if the speed is greater than the speed limit
 
 def log_telemetry(steering_angle, throttle, speed):
     print(f"Raw steering angle: {steering_angle}")
@@ -41,6 +44,9 @@ def log_telemetry(steering_angle, throttle, speed):
 
 @sio.on('telemetry')
 def telemetry(sid, data):
+    '''
+    Controller function that receives telemetry data from the simulator
+    '''
     speed = float(data['speed'])
     image = Image.open(BytesIO(base64.b64decode(data['image'])))
     image = np.asarray(image)
